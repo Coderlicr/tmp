@@ -1,160 +1,184 @@
 /*
- * top_module.c -- Fruit-Ninja DE1-SoC driver (ultrasonic version)
+ * top_module.c  --  Linux platform/misc driver for Fruit-Ninja FPGA peripheral
  *
- * Exposes /dev/top_module with ioctls:
- *   READ_ULTRA       - latch (status, last_echo_cnt, sample_id), clear new bit
- *   WRITE_FRUIT      - push fruit position/radius/visible to FPGA
- *   WRITE_SCORE      - set score register (drives VGA score bar)
- *   WRITE_GAME_STATE - set game-state register
+ * Exposes /dev/top_module with ioctl interface for:
+ *   - Reading motion detection status   (MOTION_READ)
+ *   - Writing fruit display parameters  (FRUIT_WRITE)
+ *   - Writing score                     (SCORE_WRITE)
+ *   - Writing game state                (GAME_ST_WRITE)
  *
- * Platform device is bound via device tree:
- *   compatible = "csee4840,top_module-1.0";
- *
- * Register map in FPGA (byte offsets from base):
- *   0x00 ULTRA_STATUS (R/W: bit0 new, bit1 echo, bit2 trig; write 1 to bit0 clears new)
- *   0x04 LAST_ECHO_CNT (R)
- *   0x08 CURR_ECHO_CNT (R)
- *   0x0C SAMPLE_ID     (R)
- *   0x10 FRUIT_X       (W)
- *   0x14 FRUIT_Y       (W)
- *   0x18 FRUIT_RADIUS  (W)
- *   0x1C FRUIT_CTRL    (W, bit0 visible)
- *   0x20 SCORE         (W)
- *   0x24 GAME_STATE    (W)
+ * Register bus: Avalon-MM, 32-bit data, word-addressed.
  */
 
 #include <linux/module.h>
 #include <linux/init.h>
+#include <linux/errno.h>
+#include <linux/version.h>
+#include <linux/kernel.h>
 #include <linux/platform_device.h>
-#include <linux/of.h>
-#include <linux/io.h>
 #include <linux/miscdevice.h>
-#include <linux/uaccess.h>
 #include <linux/slab.h>
+#include <linux/io.h>
+#include <linux/of.h>
+#include <linux/of_address.h>
 #include <linux/fs.h>
-
+#include <linux/uaccess.h>
 #include "top_module.h"
 
 #define DRIVER_NAME "top_module"
 
-struct top_dev {
-    void __iomem *regs;
-    struct miscdevice misc;
-};
+/* ---- device state ---- */
+struct fruit_ninja_dev {
+	struct resource res;
+	void __iomem   *virtbase;
+} dev;
 
-static struct top_dev *g_dev;  /* single instance */
+/* ---- low-level register helpers ---- */
+static inline u32 reg_read(unsigned int offset)
+{
+	return ioread32((u8 *)dev.virtbase + offset);
+}
+
+static inline void reg_write(unsigned int offset, u32 value)
+{
+	iowrite32(value, (u8 *)dev.virtbase + offset);
+}
 
 /* ---- ioctl ---- */
-static long top_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+static long top_module_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 {
-    struct top_dev *d = g_dev;
-    if (!d || !d->regs)
-        return -ENODEV;
+	motion_status_t ms;
+	fruit_params_t  fp;
+	unsigned int    val;
 
-    switch (cmd) {
-    case READ_ULTRA: {
-        struct ultra_sample s;
-        s.status        = ioread32(d->regs + ULTRA_STATUS_OFF);
-        s.last_echo_cnt = ioread32(d->regs + LAST_ECHO_CNT_OFF);
-        s.sample_id     = ioread32(d->regs + SAMPLE_ID_OFF);
-        /* clear new_sample bit (write-1-to-clear) */
-        iowrite32(ULTRA_STATUS_NEW_BIT, d->regs + ULTRA_STATUS_OFF);
-        if (copy_to_user((void __user *)arg, &s, sizeof(s)))
-            return -EFAULT;
-        return 0;
-    }
-    case WRITE_FRUIT: {
-        struct fruit_cmd f;
-        if (copy_from_user(&f, (void __user *)arg, sizeof(f)))
-            return -EFAULT;
-        iowrite32(f.x,             d->regs + FRUIT_X_OFF);
-        iowrite32(f.y,             d->regs + FRUIT_Y_OFF);
-        iowrite32(f.radius,        d->regs + FRUIT_RADIUS_OFF);
-        iowrite32(f.visible & 0x1, d->regs + FRUIT_CTRL_OFF);
-        return 0;
-    }
-    case WRITE_SCORE: {
-        unsigned int v;
-        if (copy_from_user(&v, (void __user *)arg, sizeof(v)))
-            return -EFAULT;
-        iowrite32(v, d->regs + SCORE_OFF);
-        return 0;
-    }
-    case WRITE_GAME_STATE: {
-        unsigned int v;
-        if (copy_from_user(&v, (void __user *)arg, sizeof(v)))
-            return -EFAULT;
-        iowrite32(v, d->regs + GAME_STATE_OFF);
-        return 0;
-    }
-    default:
-        return -ENOTTY;
-    }
+	switch (cmd) {
+
+	case MOTION_READ:
+		ms.motion_detected    = reg_read(REG_MOTION_STATUS) & 1;
+		ms.changed_pixel_count = reg_read(REG_CHANGED_COUNT);
+		ms.frame_counter       = reg_read(REG_FRAME_COUNTER);
+		if (copy_to_user((motion_status_t __user *)arg, &ms, sizeof(ms)))
+			return -EACCES;
+		break;
+
+	case FRUIT_WRITE:
+		if (copy_from_user(&fp, (fruit_params_t __user *)arg, sizeof(fp)))
+			return -EACCES;
+		reg_write(REG_FRUIT_X,    fp.x      & 0x3FF);
+		reg_write(REG_FRUIT_Y,    fp.y      & 0x3FF);
+		reg_write(REG_FRUIT_RADIUS, fp.radius & 0x3FF);
+		reg_write(REG_FRUIT_CTRL, fp.visible & 1);
+		break;
+
+	case SCORE_WRITE:
+		if (copy_from_user(&val, (unsigned int __user *)arg, sizeof(val)))
+			return -EACCES;
+		reg_write(REG_SCORE, val);
+		break;
+
+	case GAME_ST_WRITE:
+		if (copy_from_user(&val, (unsigned int __user *)arg, sizeof(val)))
+			return -EACCES;
+		reg_write(REG_GAME_STATE, val);
+		break;
+
+	default:
+		return -EINVAL;
+	}
+	return 0;
 }
 
-static const struct file_operations top_fops = {
-    .owner          = THIS_MODULE,
-    .unlocked_ioctl = top_ioctl,
+/* ---- file ops ---- */
+static const struct file_operations top_module_fops = {
+	.owner          = THIS_MODULE,
+	.unlocked_ioctl = top_module_ioctl,
 };
 
-/* ---- platform driver ---- */
-static int top_probe(struct platform_device *pdev)
+static struct miscdevice top_module_misc_device = {
+	.minor = MISC_DYNAMIC_MINOR,
+	.name  = DRIVER_NAME,
+	.fops  = &top_module_fops,
+};
+
+/* ---- probe / remove ---- */
+static int __init top_module_probe(struct platform_device *pdev)
 {
-    struct top_dev *d;
-    struct resource *r;
-    int ret;
+	int ret;
 
-    d = devm_kzalloc(&pdev->dev, sizeof(*d), GFP_KERNEL);
-    if (!d) return -ENOMEM;
+	ret = misc_register(&top_module_misc_device);
+	if (ret)
+		return ret;
 
-    r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-    d->regs = devm_ioremap_resource(&pdev->dev, r);
-    if (IS_ERR(d->regs))
-        return PTR_ERR(d->regs);
+	ret = of_address_to_resource(pdev->dev.of_node, 0, &dev.res);
+	if (ret) {
+		ret = -ENOENT;
+		goto out_deregister;
+	}
 
-    d->misc.minor  = MISC_DYNAMIC_MINOR;
-    d->misc.name   = DRIVER_NAME;
-    d->misc.fops   = &top_fops;
-    ret = misc_register(&d->misc);
-    if (ret) return ret;
+	if (!request_mem_region(dev.res.start, resource_size(&dev.res),
+				DRIVER_NAME)) {
+		ret = -EBUSY;
+		goto out_deregister;
+	}
 
-    platform_set_drvdata(pdev, d);
-    g_dev = d;
+	dev.virtbase = of_iomap(pdev->dev.of_node, 0);
+	if (!dev.virtbase) {
+		ret = -ENOMEM;
+		goto out_release;
+	}
 
-    /* initial state: fruit hidden, score 0, game_state 0 */
-    iowrite32(0, d->regs + FRUIT_CTRL_OFF);
-    iowrite32(0, d->regs + SCORE_OFF);
-    iowrite32(0, d->regs + GAME_STATE_OFF);
+	pr_info(DRIVER_NAME ": mapped to %p, size %u\n",
+		dev.virtbase, (unsigned)resource_size(&dev.res));
+	return 0;
 
-    dev_info(&pdev->dev, "top_module loaded, regs @ %p\n", d->regs);
-    return 0;
+out_release:
+	release_mem_region(dev.res.start, resource_size(&dev.res));
+out_deregister:
+	misc_deregister(&top_module_misc_device);
+	return ret;
 }
 
-static int top_remove(struct platform_device *pdev)
+static int top_module_remove(struct platform_device *pdev)
 {
-    struct top_dev *d = platform_get_drvdata(pdev);
-    misc_deregister(&d->misc);
-    g_dev = NULL;
-    return 0;
+	iounmap(dev.virtbase);
+	release_mem_region(dev.res.start, resource_size(&dev.res));
+	misc_deregister(&top_module_misc_device);
+	return 0;
 }
 
-static const struct of_device_id top_of_match[] = {
-    { .compatible = "csee4840,top_module-1.0" },
-    { }
+/* ---- device-tree match ---- */
+#ifdef CONFIG_OF
+static const struct of_device_id top_module_of_match[] = {
+	{ .compatible = "csee4840,top_module-1.0" },
+	{},
 };
-MODULE_DEVICE_TABLE(of, top_of_match);
+MODULE_DEVICE_TABLE(of, top_module_of_match);
+#endif
 
-static struct platform_driver top_driver = {
-    .driver = {
-        .name = DRIVER_NAME,
-        .of_match_table = top_of_match,
-        .owner = THIS_MODULE,
-    },
-    .probe  = top_probe,
-    .remove = top_remove,
+static struct platform_driver top_module_driver = {
+	.driver = {
+		.name           = DRIVER_NAME,
+		.owner          = THIS_MODULE,
+		.of_match_table = of_match_ptr(top_module_of_match),
+	},
+	.remove = __exit_p(top_module_remove),
 };
 
-module_platform_driver(top_driver);
+static int __init top_module_init(void)
+{
+	pr_info(DRIVER_NAME ": init\n");
+	return platform_driver_probe(&top_module_driver, top_module_probe);
+}
+
+static void __exit top_module_exit(void)
+{
+	platform_driver_unregister(&top_module_driver);
+	pr_info(DRIVER_NAME ": exit\n");
+}
+
+module_init(top_module_init);
+module_exit(top_module_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Fruit-Ninja DE1-SoC ultrasonic + VGA driver");
+MODULE_AUTHOR("Peiheng Li, Chengrui Li, Yitong Bai");
+MODULE_DESCRIPTION("Fruit Ninja - DE1-SoC FPGA driver");

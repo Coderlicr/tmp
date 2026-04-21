@@ -7,47 +7,43 @@
 #include <sys/ioctl.h>
 #endif
 
-/* ---- Register offsets (byte) ---- */
-#define ULTRA_STATUS_OFF      0x00
-#define LAST_ECHO_CNT_OFF     0x04
-#define CURR_ECHO_CNT_OFF     0x08
-#define SAMPLE_ID_OFF         0x0C
-#define FRUIT_X_OFF           0x10
-#define FRUIT_Y_OFF           0x14
-#define FRUIT_RADIUS_OFF      0x18
-#define FRUIT_CTRL_OFF        0x1C   /* bit0 = visible */
-#define SCORE_OFF             0x20
-#define GAME_STATE_OFF        0x24
+/* ---- Hardware register byte offsets (Avalon-MM, 32-bit) ---- */
+#define REG_MOTION_STATUS   0x00   /* R   bit0 = motion_detected       */
+#define REG_CHANGED_COUNT   0x04   /* R   number of changed pixels     */
+#define REG_FRAME_COUNTER   0x08   /* R   camera frame counter         */
+/* 0x0C reserved */
+#define REG_FRUIT_X         0x10   /* W   fruit centre x  (0-639)      */
+#define REG_FRUIT_Y         0x14   /* W   fruit centre y  (0-479)      */
+#define REG_FRUIT_RADIUS    0x18   /* W   fruit radius                 */
+#define REG_FRUIT_CTRL      0x1C   /* W   bit0 = fruit_visible         */
+#define REG_SCORE           0x20   /* W   current score                */
+#define REG_GAME_STATE      0x24   /* W   game state flags             */
 
-/* ---- status bits ---- */
-#define ULTRA_STATUS_NEW_BIT   0x1
-#define ULTRA_STATUS_ECHO_BIT  0x2
-#define ULTRA_STATUS_TRIG_BIT  0x4
+/* ---- Data structures shared between kernel and user space ---- */
+typedef struct {
+    unsigned int motion_detected;
+    unsigned int changed_pixel_count;
+    unsigned int frame_counter;
+} motion_status_t;
 
-/* Distance conversion: 50 MHz counter, sound 343 m/s round-trip
- * cm = ticks / (50e6 * 2 / 343 / 100) ≈ ticks / 2915
- * Use 2900 for simplicity. */
-#define ULTRA_TICKS_PER_CM   2900u
+typedef struct {
+    unsigned int x;
+    unsigned int y;
+    unsigned int radius;
+    unsigned int visible;
+} fruit_params_t;
 
-/* ---- exchange structs ---- */
-struct ultra_sample {
-    unsigned int status;          /* raw status register (after read new is cleared) */
-    unsigned int last_echo_cnt;   /* 50 MHz ticks */
-    unsigned int sample_id;       /* increments each new sample */
-};
+/* ---- ioctl definitions ---- */
+#define FRUTNINJA_MAGIC  'F'
 
-struct fruit_cmd {
-    unsigned short x;        /* 0..639 */
-    unsigned short y;        /* 0..479 */
-    unsigned short radius;   /* px */
-    unsigned char  visible;  /* 0/1 */
-};
+#define MOTION_READ    _IOR(FRUTNINJA_MAGIC, 1, motion_status_t)
+#define FRUIT_WRITE    _IOW(FRUTNINJA_MAGIC, 2, fruit_params_t)
+#define SCORE_WRITE    _IOW(FRUTNINJA_MAGIC, 3, unsigned int)
+#define GAME_ST_WRITE  _IOW(FRUTNINJA_MAGIC, 4, unsigned int)
 
-/* ---- ioctls ---- */
-#define TOP_MODULE_MAGIC  'q'
-#define READ_ULTRA        _IOR(TOP_MODULE_MAGIC, 1, struct ultra_sample)
-#define WRITE_FRUIT       _IOW(TOP_MODULE_MAGIC, 2, struct fruit_cmd)
-#define WRITE_SCORE       _IOW(TOP_MODULE_MAGIC, 3, unsigned int)
-#define WRITE_GAME_STATE  _IOW(TOP_MODULE_MAGIC, 4, unsigned int)
+/* ---- Game constants (shared so FPGA line position matches HPS logic) ---- */
+#define SCREEN_W    640
+#define SCREEN_H    480
+#define LINE_Y      240
 
 #endif /* _TOP_MODULE_H */
