@@ -1,13 +1,12 @@
 /*
  * top_module.c  --  Linux platform/misc driver for Fruit-Ninja FPGA peripheral
+ *                   (ultrasonic version; structure copied from legacy camera driver)
  *
  * Exposes /dev/top_module with ioctl interface for:
- *   - Reading motion detection status   (MOTION_READ)
- *   - Writing fruit display parameters  (FRUIT_WRITE)
- *   - Writing score                     (SCORE_WRITE)
- *   - Writing game state                (GAME_ST_WRITE)
- *
- * Register bus: Avalon-MM, 32-bit data, word-addressed.
+ *   MOTION_READ     - snapshot (new_flag, last_echo_cnt, sample_id); clears "new"
+ *   FRUIT_WRITE     - push fruit (x, y, radius, visible) to FPGA
+ *   SCORE_WRITE     - write score register
+ *   GAME_ST_WRITE   - write game_state register
  */
 
 #include <linux/module.h>
@@ -49,14 +48,18 @@ static long top_module_ioctl(struct file *f, unsigned int cmd, unsigned long arg
 {
 	motion_status_t ms;
 	fruit_params_t  fp;
-	unsigned int    val;
+	unsigned int    val, status;
 
 	switch (cmd) {
 
 	case MOTION_READ:
-		ms.motion_detected    = reg_read(REG_MOTION_STATUS) & 1;
-		ms.changed_pixel_count = reg_read(REG_CHANGED_COUNT);
-		ms.frame_counter       = reg_read(REG_FRAME_COUNTER);
+		status = reg_read(REG_ULTRA_STATUS);
+		ms.motion_detected     = status & ULTRA_STATUS_NEW;
+		ms.changed_pixel_count = reg_read(REG_LAST_ECHO_CNT);
+		ms.frame_counter       = reg_read(REG_SAMPLE_ID);
+		/* write 1 to bit0 clears the new_sample flag */
+		if (ms.motion_detected)
+			reg_write(REG_ULTRA_STATUS, ULTRA_STATUS_NEW);
 		if (copy_to_user((motion_status_t __user *)arg, &ms, sizeof(ms)))
 			return -EACCES;
 		break;
@@ -64,10 +67,10 @@ static long top_module_ioctl(struct file *f, unsigned int cmd, unsigned long arg
 	case FRUIT_WRITE:
 		if (copy_from_user(&fp, (fruit_params_t __user *)arg, sizeof(fp)))
 			return -EACCES;
-		reg_write(REG_FRUIT_X,    fp.x      & 0x3FF);
-		reg_write(REG_FRUIT_Y,    fp.y      & 0x3FF);
-		reg_write(REG_FRUIT_RADIUS, fp.radius & 0x3FF);
-		reg_write(REG_FRUIT_CTRL, fp.visible & 1);
+		reg_write(REG_FRUIT_X,      fp.x       & 0x3FF);
+		reg_write(REG_FRUIT_Y,      fp.y       & 0x3FF);
+		reg_write(REG_FRUIT_RADIUS, fp.radius  & 0x3FF);
+		reg_write(REG_FRUIT_CTRL,   fp.visible & 1);
 		break;
 
 	case SCORE_WRITE:
@@ -181,4 +184,4 @@ module_exit(top_module_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Peiheng Li, Chengrui Li, Yitong Bai");
-MODULE_DESCRIPTION("Fruit Ninja - DE1-SoC FPGA driver");
+MODULE_DESCRIPTION("Fruit Ninja DE1-SoC FPGA driver (ultrasonic)");
