@@ -31,9 +31,11 @@
 /* ---- Tuning ---- */
 #define Q              4            /* quarter-pixel fixed point */
 #define GRAVITY_Q      2            /* qpx / frame^2 */
-#define VY_MIN_Q      (-70)         /* initial upward speed (qpx/frame) */
-#define VY_MAX_Q      (-48)
-#define VX_MAX_Q       32           /* horizontal drift range ± qpx/frame */
+/* Initial downward speed (positive = down), qpx/frame */
+#define VY_MIN_Q       16
+#define VY_MAX_Q       32
+#define VX_MAX_Q       40           /* horizontal speed magnitude, qpx/frame */
+#define LINE_Y         240          /* cutting line y coordinate */
 #define RADIUS_MIN     22
 #define RADIUS_MAX     34
 #define FRAME_US       33000        /* ~30 fps */
@@ -103,19 +105,42 @@ static void write_state_hw(void)
 }
 
 /* ---- Object spawn / update ---- */
+/*
+ * Spawn zones (always above the cutting line, guaranteed to cross it):
+ *   0. TOP:         from near top edge, straight / slightly angled downward
+ *   1. UPPER-LEFT:  from upper-left quadrant, drifting right-down
+ *   2. UPPER-RIGHT: from upper-right quadrant, drifting left-down
+ */
 static void spawn_object(void)
 {
-    obj_x        = 60 + rand() % (SCREEN_W - 120);
-    obj_y_q      = (SCREEN_H + 30) * Q;                      /* just below screen */
-    obj_vy_q     = rand_range(VY_MIN_Q, VY_MAX_Q);
-    obj_vx_q     = rand_range(-VX_MAX_Q, VX_MAX_Q);
+    int zone = rand() % 3;
+    obj_vy_q  = rand_range(VY_MIN_Q, VY_MAX_Q);    /* always downward */
     obj_radius   = rand_range(RADIUS_MIN, RADIUS_MAX);
     obj_visible  = 1;
     obj_already_cut = 0;
     obj_is_bomb  = (rand() % 100) < BOMB_PERCENT;
-    printf("  spawn %s @ x=%d vx=%+d vy=%+d r=%d\n",
+
+    switch (zone) {
+    case 0: /* TOP: random x in middle third, small ±vx */
+        obj_x    = rand_range(SCREEN_W / 4, 3 * SCREEN_W / 4);
+        obj_y_q  = rand_range(10, 40) * Q;
+        obj_vx_q = rand_range(-VX_MAX_Q / 2, VX_MAX_Q / 2);
+        break;
+    case 1: /* UPPER-LEFT: spawn left, drift right */
+        obj_x    = rand_range(30, SCREEN_W / 4);
+        obj_y_q  = rand_range(10, LINE_Y / 2) * Q;
+        obj_vx_q = rand_range(VX_MAX_Q / 2, VX_MAX_Q);
+        break;
+    case 2: /* UPPER-RIGHT: spawn right, drift left */
+        obj_x    = rand_range(3 * SCREEN_W / 4, SCREEN_W - 30);
+        obj_y_q  = rand_range(10, LINE_Y / 2) * Q;
+        obj_vx_q = rand_range(-VX_MAX_Q, -VX_MAX_Q / 2);
+        break;
+    }
+
+    printf("  spawn %s zone=%d @ x=%d y=%d vx=%+d vy=%+d r=%d\n",
            obj_is_bomb ? "BOMB" : "fruit",
-           obj_x, obj_vx_q, obj_vy_q, obj_radius);
+           zone, obj_x, obj_y_q / Q, obj_vx_q, obj_vy_q, obj_radius);
     fflush(stdout);
     write_state_hw();
     write_fruit_hw();
