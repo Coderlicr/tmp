@@ -38,6 +38,7 @@ static inline u32 reg_read(unsigned int offset)
 	return ioread32((u8 *)dev.virtbase + offset);
 }
 
+// reg_write(REG_FRUIT_X, 320);
 static inline void reg_write(unsigned int offset, u32 value)
 {
 	iowrite32(value, (u8 *)dev.virtbase + offset);
@@ -83,6 +84,12 @@ static long top_module_ioctl(struct file *f, unsigned int cmd, unsigned long arg
 		if (copy_from_user(&val, (unsigned int __user *)arg, sizeof(val)))
 			return -EACCES;
 		reg_write(REG_GAME_STATE, val);
+		break;
+
+	case LIVES_WRITE:
+		if (copy_from_user(&val, (unsigned int __user *)arg, sizeof(val)))
+			return -EACCES;
+		reg_write(REG_LIVES, val);
 		break;
 
 	default:

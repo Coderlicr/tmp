@@ -23,6 +23,7 @@
  *   0x1C FRUIT_CTRL      bit0 = visible
  *   0x20 SCORE
  *   0x24 GAME_STATE
+ *   0x28 LIVES           0..3  (number of hearts remaining)
  */
 #define REG_ULTRA_STATUS     0x00
 #define REG_LAST_ECHO_CNT    0x04
@@ -34,6 +35,7 @@
 #define REG_FRUIT_CTRL       0x1C
 #define REG_SCORE            0x20
 #define REG_GAME_STATE       0x24
+#define REG_LIVES            0x28
 
 #define ULTRA_STATUS_NEW     0x1
 #define ULTRA_STATUS_ECHO    0x2
@@ -64,6 +66,7 @@ typedef struct {
 #define FRUIT_WRITE    _IOW(FRUTNINJA_MAGIC, 2, fruit_params_t)
 #define SCORE_WRITE    _IOW(FRUTNINJA_MAGIC, 3, unsigned int)
 #define GAME_ST_WRITE  _IOW(FRUTNINJA_MAGIC, 4, unsigned int)
+#define LIVES_WRITE    _IOW(FRUTNINJA_MAGIC, 5, unsigned int)
 
 /* ---- Game constants ---- */
 #define SCREEN_W    640

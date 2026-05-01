@@ -104,6 +104,12 @@ static void write_state_hw(void)
     ioctl(fd, GAME_ST_WRITE, &s);
 }
 
+static void write_lives_hw(void)
+{
+    unsigned int l = (lives < 0) ? 0u : (unsigned int)lives;
+    ioctl(fd, LIVES_WRITE, &l);
+}
+
 /* ---- Object spawn / update ---- */
 /*
  * Spawn zones (always above the cutting line, guaranteed to cross it):
@@ -160,6 +166,7 @@ static void update_object(void)
         if (obj_visible && !obj_already_cut) {
             if (!obj_is_bomb) {
                 lives--;
+                write_lives_hw();
                 printf("  MISS fruit!  lives=%d\n", lives);
                 fflush(stdout);
             } else {
@@ -214,6 +221,7 @@ int main(void)
            MAX_LIVES);
 
     write_score_hw();
+    write_lives_hw();
     spawn_object();
 
     while (!g_stop && lives > 0) {
@@ -225,6 +233,7 @@ int main(void)
                 obj_visible = 0;
                 if (obj_is_bomb) {
                     lives--;
+                    write_lives_hw();
                     printf("  BOMB CUT!  lives=%d\n", lives);
                 } else {
                     score++;
